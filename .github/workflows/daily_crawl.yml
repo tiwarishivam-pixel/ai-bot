@@ -1,0 +1,38 @@
+name: Hackathon Crawler
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Runs every 6 hours
+  workflow_dispatch:      # Allows you to click "Run Now" manually
+
+jobs:
+  run_crawler:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Run Crawler Script
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        CHAT_ID: ${{ secrets.CHAT_ID }}
+      run: python main.py
+
+    - name: Save "Seen" Hackathons
+      # This step commits the updated JSON file back to the repo
+      # so the bot remembers what it saw next time.
+      run: |
+        git config --global user.name 'HackathonBot'
+        git config --global user.email 'bot@noreply.github.com'
+        git add seen_hacks.json
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen hackathons" && git push)

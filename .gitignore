@@ -1,0 +1,11 @@
+# Ignore the Virtual Environment (Heavy folders)
+venv/
+env/
+.env
+
+# Ignore Python Cache
+__pycache__/
+*.pyc
+
+# Mac system files (if applicable)
+.DS_Store
