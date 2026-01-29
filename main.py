@@ -6,11 +6,22 @@ from bs4 import BeautifulSoup
 from telegram import Bot
 
 # --- CONFIGURATION ---
-# We get these from GitHub Secrets later. 
-# locally, you can hardcode them to test, but DO NOT commit keys to GitHub.
-BOT_TOKEN = os.environ.get("BOT_TOKEN") 
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 DB_FILE = "seen_hacks.json"
+
+# --- BROWSERS HEADERS (To bypass security) ---
+# Ye headers server ko convince karte hain ki hum Human hain
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://google.com"
+}
+
+# Specific headers for JSON APIs
+API_HEADERS = HEADERS.copy()
+API_HEADERS["Accept"] = "application/json, text/plain, */*"
 
 # --- CRAWLERS ---
 
@@ -18,9 +29,20 @@ def fetch_unstop():
     print("🔎 Checking Unstop...")
     url = "https://unstop.com/api/public/opportunity/search-result"
     payload = {"opportunity": "hackathons", "filters": "open_for_registration", "page": 1}
+    
     try:
-        r = requests.get(url, params=payload).json()
-        hacks = r.get('data', {}).get('data', [])
+        # Unstop specific referer needed
+        local_headers = API_HEADERS.copy()
+        local_headers["Referer"] = "https://unstop.com/hackathons"
+        
+        r = requests.get(url, params=payload, headers=local_headers)
+        
+        if r.status_code != 200:
+            print(f"⚠️ Unstop Blocked: Status {r.status_code}")
+            return []
+            
+        data = r.json()
+        hacks = data.get('data', {}).get('data', [])
         results = []
         for h in hacks:
             if h.get('regnRequirements', {}).get('remainingDays', 0) > 0:
@@ -30,62 +52,110 @@ def fetch_unstop():
                 })
         return results
     except Exception as e:
-        print(f"Unstop Error: {e}")
+        print(f"❌ Unstop Error: {e}")
         return []
 
 def fetch_devfolio():
     print("🔎 Checking Devfolio...")
     url = "https://api.devfolio.co/api/search/hackathons"
     payload = {"type": "offline", "filter": "open", "page": 0, "limit": 20}
+    
     try:
-        r = requests.post(url, json=payload, headers={"Origin": "https://devfolio.co"}).json()
+        # Devfolio is strict about Origin
+        local_headers = API_HEADERS.copy()
+        local_headers["Origin"] = "https://devfolio.co"
+        local_headers["Referer"] = "https://devfolio.co/"
+        
+        r = requests.post(url, json=payload, headers=local_headers)
+        
+        if r.status_code != 200:
+            print(f"⚠️ Devfolio Blocked: Status {r.status_code}")
+            return []
+
+        data = r.json()
         results = []
-        for h in r.get('result', []):
+        for h in data.get('result', []):
             results.append({
                 "id": f"devfolio_{h['slug']}",
                 "text": f"🛠 *{h['name']}* (Devfolio)\n🔗 https://{h['slug']}.devfolio.co"
             })
         return results
     except Exception as e:
-        print(f"Devfolio Error: {e}")
+        print(f"❌ Devfolio Error: {e}")
         return []
 
 def fetch_devpost():
     print("🔎 Checking Devpost...")
     url = "https://devpost.com/hackathons?orderBy=submission-deadline&challenge_type[]=is_open"
     try:
-        soup = BeautifulSoup(requests.get(url).text, 'html.parser')
+        r = requests.get(url, headers=HEADERS)
+        soup = BeautifulSoup(r.text, 'html.parser')
         tiles = soup.find_all('div', class_='hackathon-tile')
         results = []
         for tile in tiles:
-            title = tile.find('h3', class_='mb-4').text.strip()
-            link = tile.find('a', href=True)['href']
-            # Use link as ID since Devpost doesn't expose a clean ID
+            title_tag = tile.find('h3', class_='mb-4')
+            if title_tag:
+                title = title_tag.text.strip()
+                link = tile.find('a', href=True)['href']
+                results.append({
+                    "id": f"devpost_{link}", 
+                    "text": f"🌍 *{title}* (Devpost)\n🔗 {link}"
+                })
+        return results
+    except Exception as e:
+        print(f"❌ Devpost Error: {e}")
+        return []
+
+def fetch_mlh():
+    print("🔎 Checking MLH (Major League Hacking)...")
+    # MLH uses year-based URLs. 2026 season url:
+    url = "https://mlh.io/seasons/2026/events" 
+    try:
+        r = requests.get(url, headers=HEADERS)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        events = soup.find_all('div', class_='event-wrapper')
+        results = []
+        for event in events:
+            title_tag = event.find('h3', class_='event-name')
+            if not title_tag: continue
+            title = title_tag.text.strip()
+            link_tag = event.find('a', class_='event-link', href=True)
+            link = link_tag['href'] if link_tag else "https://mlh.io"
+            
+            # Create a unique ID from the link
             results.append({
-                "id": f"devpost_{link}", 
-                "text": f"🌍 *{title}* (Devpost)\n🔗 {link}"
+                "id": f"mlh_{link}",
+                "text": f"🎓 *{title}* (MLH)\n🔗 {link}"
             })
         return results
     except Exception as e:
-        print(f"Devpost Error: {e}")
+        print(f"❌ MLH Error: {e}")
         return []
 
 # --- MAIN LOGIC ---
 
 async def run_bot():
     if not BOT_TOKEN or not CHAT_ID:
-        print("❌ Error: Bot Token or Chat ID missing.")
-        return
-
+        print("❌ Secrets missing. Checking local hardcoded variables for testing...")
+        # For local testing only. Remove before pushing if you want.
+    
     # 1. Load History
+    seen_ids = []
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r') as f:
-            seen_ids = json.load(f)
-    else:
-        seen_ids = []
+        try:
+            with open(DB_FILE, 'r') as f:
+                content = f.read()
+                if content:
+                    seen_ids = json.loads(content)
+        except json.JSONDecodeError:
+            seen_ids = []
 
-    # 2. Aggregate Data
-    all_hacks = fetch_unstop() + fetch_devfolio() + fetch_devpost()
+    # 2. Aggregate Data from ALL sources
+    all_hacks = []
+    all_hacks += fetch_unstop()
+    all_hacks += fetch_devfolio()
+    all_hacks += fetch_devpost()
+    all_hacks += fetch_mlh() # New Source Added
     
     new_hacks = []
     for hack in all_hacks:
@@ -101,10 +171,12 @@ async def run_bot():
         for hack in new_hacks:
             try:
                 await bot.send_message(chat_id=CHAT_ID, text=hack['text'], parse_mode='Markdown')
+                # Wait 1 sec to avoid spamming Telegram API
+                await asyncio.sleep(1) 
             except Exception as e:
                 print(f"Failed to send: {e}")
         
-        # 4. Save History (Crucial to avoid duplicates)
+        # 4. Save History
         with open(DB_FILE, 'w') as f:
             json.dump(seen_ids, f)
     else:
