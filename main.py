@@ -10,14 +10,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 DB_FILE = "seen_hacks.json"
 
-# --- SETUP SCRAPER (The Anti-Bot Weapon) ---
-# Ye tool Cloudflare protection ko bypass karega
+# --- SCRAPER SETUP ---
 scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
+    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
 )
 
 # --- CRAWLERS ---
@@ -26,27 +21,15 @@ def fetch_unstop():
     print("🔎 Checking Unstop...")
     url = "https://unstop.com/api/public/opportunity/search-result"
     payload = {"opportunity": "hackathons", "filters": "open_for_registration", "page": 1}
-    
     try:
-        # Request using scraper instead of simple requests
         r = scraper.get(url, params=payload)
-        
-        # Agar JSON nahi mila (mtlb block hua), to error pakdhenge
-        try:
-            data = r.json()
-        except:
-            print(f"⚠️ Unstop Response was not JSON. Status: {r.status_code}")
-            return []
-
+        data = r.json()
         hacks = data.get('data', {}).get('data', [])
-        results = []
-        for h in hacks:
-            if h.get('regnRequirements', {}).get('remainingDays', 0) > 0:
-                results.append({
-                    "id": f"unstop_{h['id']}",
-                    "text": f"🚀 *{h['title']}* (Unstop)\n🔗 https://unstop.com/{h['slug']}"
-                })
-        return results
+        print(f"   ↳ Unstop found: {len(hacks)} items") # Debug Line
+        return [{
+            "id": f"unstop_{h['id']}",
+            "text": f"🚀 *{h['title']}* (Unstop)\n🔗 https://unstop.com/{h['slug']}"
+        } for h in hacks if h.get('regnRequirements', {}).get('remainingDays', 0) > 0]
     except Exception as e:
         print(f"❌ Unstop Error: {e}")
         return []
@@ -55,25 +38,15 @@ def fetch_devfolio():
     print("🔎 Checking Devfolio...")
     url = "https://api.devfolio.co/api/search/hackathons"
     payload = {"type": "offline", "filter": "open", "page": 0, "limit": 20}
-    
     try:
-        # Headers specifically for Devfolio
-        headers = {"Origin": "https://devfolio.co", "Referer": "https://devfolio.co/"}
-        r = scraper.post(url, json=payload, headers=headers)
-        
-        try:
-            data = r.json()
-        except:
-            print(f"⚠️ Devfolio Response was not JSON. Status: {r.status_code}")
-            return []
-
-        results = []
-        for h in data.get('result', []):
-            results.append({
-                "id": f"devfolio_{h['slug']}",
-                "text": f"🛠 *{h['name']}* (Devfolio)\n🔗 https://{h['slug']}.devfolio.co"
-            })
-        return results
+        r = scraper.post(url, json=payload, headers={"Origin": "https://devfolio.co"})
+        data = r.json()
+        hacks = data.get('result', [])
+        print(f"   ↳ Devfolio found: {len(hacks)} items")
+        return [{
+            "id": f"devfolio_{h['slug']}",
+            "text": f"🛠 *{h['name']}* (Devfolio)\n🔗 https://{h['slug']}.devfolio.co"
+        } for h in hacks]
     except Exception as e:
         print(f"❌ Devfolio Error: {e}")
         return []
@@ -82,20 +55,18 @@ def fetch_devpost():
     print("🔎 Checking Devpost...")
     url = "https://devpost.com/hackathons?orderBy=submission-deadline&challenge_type[]=is_open"
     try:
-        # Devpost doesn't block much, but cloudscraper is safer
-        r = scraper.get(url) 
+        r = scraper.get(url)
         soup = BeautifulSoup(r.text, 'html.parser')
         tiles = soup.find_all('div', class_='hackathon-tile')
+        print(f"   ↳ Devpost found: {len(tiles)} items")
         results = []
         for tile in tiles:
-            title_tag = tile.find('h3', class_='mb-4')
-            if title_tag:
-                title = title_tag.text.strip()
-                link = tile.find('a', href=True)['href']
-                results.append({
-                    "id": f"devpost_{link}", 
-                    "text": f"🌍 *{title}* (Devpost)\n🔗 {link}"
-                })
+            title = tile.find('h3', class_='mb-4').text.strip()
+            link = tile.find('a', href=True)['href']
+            results.append({
+                "id": f"devpost_{link}", 
+                "text": f"🌍 *{title}* (Devpost)\n🔗 {link}"
+            })
         return results
     except Exception as e:
         print(f"❌ Devpost Error: {e}")
@@ -108,13 +79,11 @@ def fetch_mlh():
         r = scraper.get(url)
         soup = BeautifulSoup(r.text, 'html.parser')
         events = soup.find_all('div', class_='event-wrapper')
+        print(f"   ↳ MLH found: {len(events)} items")
         results = []
         for event in events:
-            title_tag = event.find('h3', class_='event-name')
-            if not title_tag: continue
-            title = title_tag.text.strip()
-            link_tag = event.find('a', class_='event-link', href=True)
-            link = link_tag['href'] if link_tag else "https://mlh.io"
+            title = event.find('h3', class_='event-name').text.strip()
+            link = event.find('a', class_='event-link', href=True)['href']
             results.append({
                 "id": f"mlh_{link}",
                 "text": f"🎓 *{title}* (MLH)\n🔗 {link}"
@@ -122,6 +91,56 @@ def fetch_mlh():
         return results
     except Exception as e:
         print(f"❌ MLH Error: {e}")
+        return []
+
+def fetch_dorahacks():
+    print("🔎 Checking DoraHacks (Web3)...")
+    url = "https://dorahacks.io/api/hackathon/list"
+    try:
+        r = scraper.get(url)
+        data = r.json()
+        # DoraHacks structure is diverse, we take the main list
+        hacks = data.get('data', [])
+        print(f"   ↳ DoraHacks found: {len(hacks)} items")
+        results = []
+        for h in hacks:
+            # Only active ones
+            if h.get('status') == 'UPCOMING' or h.get('status') == 'ONGOING':
+                name = h.get('name', 'Unknown Hackathon')
+                link = f"https://dorahacks.io/hackathon/{h.get('id')}"
+                results.append({
+                    "id": f"dora_{h['id']}",
+                    "text": f"💰 *{name}* (DoraHacks)\n🔗 {link}"
+                })
+        return results
+    except Exception as e:
+        print(f"❌ DoraHacks Error: {e}")
+        return []
+
+def fetch_hackerearth():
+    print("🔎 Checking HackerEarth (Jobs)...")
+    url = "https://www.hackerearth.com/challenges/hackathon/"
+    try:
+        r = scraper.get(url)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        # HackerEarth uses 'challenge-card-modern' class
+        cards = soup.find_all('div', class_='challenge-card-modern')
+        print(f"   ↳ HackerEarth found: {len(cards)} items")
+        results = []
+        for card in cards:
+            # Filter for "Live" or "Upcoming"
+            status_tag = card.find('div', class_='status-label')
+            if status_tag and ('Live' in status_tag.text or 'Upcoming' in status_tag.text):
+                title = card.find('span', class_='challenge-list-title').text.strip()
+                link = card.find('a', class_='challenge-card-link')['href']
+                if not link.startswith('http'): link = f"https:{link}"
+                results.append({
+                    "id": f"he_{link}",
+                    "text": f"💼 *{title}* (HackerEarth)\n🔗 {link}"
+                })
+        return results
+    except Exception as e:
+        print(f"❌ HackerEarth Error: {e}")
         return []
 
 # --- MAIN LOGIC ---
@@ -138,12 +157,14 @@ async def run_bot():
                 if content: seen_ids = json.loads(content)
         except: seen_ids = []
 
-    # Fetch Data
+    # Gather from ALL sources
     all_hacks = []
     all_hacks += fetch_unstop()
     all_hacks += fetch_devfolio()
     all_hacks += fetch_devpost()
     all_hacks += fetch_mlh()
+    all_hacks += fetch_dorahacks()     # NEW
+    all_hacks += fetch_hackerearth()   # NEW
     
     new_hacks = []
     for hack in all_hacks:
@@ -153,7 +174,7 @@ async def run_bot():
 
     if new_hacks:
         bot = Bot(token=BOT_TOKEN)
-        print(f"✅ Found {len(new_hacks)} new hackathons.")
+        print(f"✅ Found {len(new_hacks)} NEW hackathons to send.")
         
         for hack in new_hacks:
             try:
@@ -165,7 +186,7 @@ async def run_bot():
         with open(DB_FILE, 'w') as f:
             json.dump(seen_ids, f)
     else:
-        print("😴 No new hackathons found.")
+        print("😴 No NEW hackathons found (Database is up to date).")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
